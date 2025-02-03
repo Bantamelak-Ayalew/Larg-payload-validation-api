@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:http="http://www.mulesoft.org/schema/mule/http"
+    xmlns="http://www.mulesoft.org/schema/mule/core"
+    xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+    <http:listener-config name="HTTP_Listener_config1" doc:name="HTTP Listener config" doc:id="1dfb2fd1-4cb4-4798-9931-457b922f4b0a" >
+        <http:listener-connection host="0.0.0.0" port="8081" />
+    </http:listener-config>
+    <flow name="large-payload-validationFlow" doc:id="b30025cb-d76c-4844-911e-f7dc2f0b65fa" >
+        <http:listener doc:name="Listener" doc:id="64bb0d6c-e683-426b-b180-e25817d3e297" config-ref="HTTP_Listener_config1" path="/size"/>
+        <logger level="INFO" doc:name="Logger" doc:id="d4493df0-48cb-4d1e-bd4f-071eec85a579" message="#[payload]"/>
+        <ee:transform doc:name="Transform Message" doc:id="f2feb129-fc8f-4591-8cd7-ed4b370f4da4" >
+            <ee:message >
+                <ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+var serializedPayload = write(payload, "application/json")
+var payloadSize = sizeOf(serializedPayload)
+---
+{
+    payload: serializedPayload,
+    size: payloadSize
+}
+]]></ee:set-payload>
+            </ee:message>
+            <ee:variables >
+                <ee:set-variable variableName="payloadSize" ><![CDATA[%dw 2.0
+output application/java
+---
+sizeOf(write(payload, "application/json"))
+]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <choice doc:name="Choice" doc:id="6b99d046-c8b3-427f-86ac-91df7312f793" >
+            <when expression="#[vars.payloadSize > 10240]">
+                <logger level="INFO" doc:name="Logger" doc:id="068f8972-9963-4e76-8593-f7328f55dae4" message='"Large payload uploaded"'/>
+                <ee:transform doc:name="Transform Message" doc:id="524f534f-cbfb-4984-b1a3-8f127a30c26d" >
+                    <ee:message >
+                        <ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+    "message": "Large payload uploaded",
+    "size": vars.payloadSize
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+            </when>
+            <otherwise >
+                <ee:transform doc:name="Transform Message" doc:id="40c751c2-0515-4ad9-8e3d-2ae287701d5a" >
+                    <ee:message >
+                        <ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+    "message": "Normal payload",
+    "size": vars.payloadSize,
+    "payload": payload
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+                <logger level="INFO" doc:name="Logger" doc:id="2a3a7f20-62c3-4f60-b85a-0e82db0719b4" message="#[payload]"/>
+            </otherwise>
+        </choice>
+    </flow>
+</mule>
