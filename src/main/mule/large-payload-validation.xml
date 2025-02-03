@@ -11,7 +11,8 @@ http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/
     <flow name="large-payload-validationFlow" doc:id="b30025cb-d76c-4844-911e-f7dc2f0b65fa" >
         <http:listener doc:name="Listener" doc:id="64bb0d6c-e683-426b-b180-e25817d3e297" config-ref="HTTP_Listener_config1" path="/size"/>
         <logger level="INFO" doc:name="Logger" doc:id="d4493df0-48cb-4d1e-bd4f-071eec85a579" message="#[payload]"/>
-        <ee:transform doc:name="Transform Message" doc:id="f2feb129-fc8f-4591-8cd7-ed4b370f4da4" >
+        <set-payload value="#[payload]" doc:name="setOriginalPayload" doc:id="1b385e61-2ca0-4e4c-b0c3-600860737a92" />
+		<ee:transform doc:name="Transform Message" doc:id="f2feb129-fc8f-4591-8cd7-ed4b370f4da4" >
             <ee:message >
                 <ee:set-payload ><![CDATA[%dw 2.0
 output application/json
