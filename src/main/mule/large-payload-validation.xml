@@ -1,68 +1,204 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<mule xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:http="http://www.mulesoft.org/schema/mule/http"
-    xmlns="http://www.mulesoft.org/schema/mule/core"
-    xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
-http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
-http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
-    <http:listener-config name="HTTP_Listener_config1" doc:name="HTTP Listener config" doc:id="1dfb2fd1-4cb4-4798-9931-457b922f4b0a" >
-        <http:listener-connection host="0.0.0.0" port="8081" />
+<mule xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+      http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+      http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+      http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- ===================== PROPERTIES CONFIG =========================== -->
+    <configuration-properties file="config.properties" />
+
+    <!-- Max payload size from external config -->
+    <!-- Example in config.properties:
+         max.size.bytes=10240
+    -->
+
+    <!-- ===================== HTTP LISTENER CONFIG ======================== -->
+    <http:listener-config name="HTTP_Listener_Config">
+        <http:listener-connection host="0.0.0.0" port="${http.port}" />
     </http:listener-config>
-    <flow name="large-payload-validationFlow" doc:id="b30025cb-d76c-4844-911e-f7dc2f0b65fa" >
-        <http:listener doc:name="Listener" doc:id="64bb0d6c-e683-426b-b180-e25817d3e297" config-ref="HTTP_Listener_config1" path="/size"/>
-        <logger level="INFO" doc:name="Logger" doc:id="d4493df0-48cb-4d1e-bd4f-071eec85a579" message="#[payload]"/>
-        <set-payload value="#[payload]" doc:name="setOriginalPayload" doc:id="1b385e61-2ca0-4e4c-b0c3-600860737a92" />
-		<ee:transform doc:name="Transform Message" doc:id="f2feb129-fc8f-4591-8cd7-ed4b370f4da4" >
-            <ee:message >
-                <ee:set-payload ><![CDATA[%dw 2.0
-output application/json
-var serializedPayload = write(payload, "application/json")
-var payloadSize = sizeOf(serializedPayload)
----
-{
-    payload: serializedPayload,
-    size: payloadSize
-}
-]]></ee:set-payload>
+
+    <!-- ===================== GLOBAL ERROR HANDLER ======================== -->
+    <error-handler name="GLOBAL_ERROR_HANDLER">
+
+        <!-- Client-side bad request -->
+        <on-error-propagate type="HTTP:BAD_REQUEST" logException="true">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[
+                    %dw 2.0
+                    output application/json
+                    ---
+                    {
+                        correlationId: vars.correlationId default "N/A",
+                        errorType: error.errorType,
+                        message: error.errorMessage,
+                        category: "BAD_REQUEST",
+                        timestamp: now()
+                    }
+                    ]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus">400</ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <!-- Generic catch-all -->
+        <on-error-continue logException="true">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[
+                    %dw 2.0
+                    output application/json
+                    ---
+                    {
+                        correlationId: vars.correlationId default "N/A",
+                        error: "INTERNAL_SERVER_ERROR",
+                        message: error.errorMessage,
+                        timestamp: now()
+                    }
+                    ]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+        </on-error-continue>
+
+    </error-handler>
+
+    <!-- ========================== MAIN FLOW ============================== -->
+
+    <flow name="payload-validation-main-flow">
+
+        <!-- Set correlation ID -->
+        <set-variable variableName="correlationId" value="#[uuid()]" />
+
+        <http:listener config-ref="HTTP_Listener_Config" path="/validate/payload" />
+
+        <!-- ============================ START LOG =========================== -->
+        <logger level="INFO" message='#[%dw 2.0
+            output application/json
+            ---
+            {
+                event: "START_FLOW",
+                correlationId: vars.correlationId,
+                flow: flow.name,
+                timestamp: now(),
+                receivedPayload: payload
+            }
+        ]'/>
+
+        <!-- Preserve the original payload -->
+        <set-variable variableName="originalPayload" value="#[payload]" />
+
+        <!-- ===================== SIZE CALCULATION ========================== -->
+        <ee:transform doc:name="Calculate Payload Size">
+            <ee:message>
+                <ee:set-payload><![CDATA[
+                %dw 2.0
+                output application/json
+                var serialized = write(vars.originalPayload, "application/json")
+                var sizeBytes = sizeOf(serialized)
+                ---
+                {
+                    payload: vars.originalPayload,
+                    sizeBytes: sizeBytes,
+                    serialized: serialized
+                }
+                ]]></ee:set-payload>
             </ee:message>
-            <ee:variables >
-                <ee:set-variable variableName="payloadSize" ><![CDATA[%dw 2.0
-output application/java
----
-sizeOf(write(payload, "application/json"))
-]]></ee:set-variable>
+            <ee:variables>
+                <ee:set-variable variableName="payloadSize">
+                    <![CDATA[
+                    %dw 2.0
+                    output application/java
+                    ---
+                    sizeOf(write(vars.originalPayload, "application/json"))
+                    ]]>
+                </ee:set-variable>
             </ee:variables>
         </ee:transform>
-        <choice doc:name="Choice" doc:id="6b99d046-c8b3-427f-86ac-91df7312f793" >
-            <when expression="#[vars.payloadSize > 10240]">
-                <logger level="INFO" doc:name="Logger" doc:id="068f8972-9963-4e76-8593-f7328f55dae4" message='"Large payload uploaded"'/>
-                <ee:transform doc:name="Transform Message" doc:id="524f534f-cbfb-4984-b1a3-8f127a30c26d" >
-                    <ee:message >
-                        <ee:set-payload ><![CDATA[%dw 2.0
-output application/json
----
-{
-    "message": "Large payload uploaded",
-    "size": vars.payloadSize
-}]]></ee:set-payload>
+
+        <!-- ========================== CHOICE LOGIC ========================= -->
+        <choice>
+            <when expression="#[vars.payloadSize > (p('max.size.bytes') as Number)]">
+                
+                <logger level="WARN" message='#[%dw 2.0
+                    output application/json
+                    ---
+                    {
+                        event: "LARGE_PAYLOAD",
+                        correlationId: vars.correlationId,
+                        sizeBytes: vars.payloadSize,
+                        maxAllowed: p("max.size.bytes")
+                    }
+                ]'/>
+
+                <ee:transform doc:name="Large Payload Response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[
+                        %dw 2.0
+                        output application/json
+                        ---
+                        {
+                            message: "Large payload uploaded",
+                            sizeBytes: vars.payloadSize,
+                            maxAllowed: p("max.size.bytes"),
+                            correlationId: vars.correlationId
+                        }
+                        ]]></ee:set-payload>
                     </ee:message>
                 </ee:transform>
+
             </when>
-            <otherwise >
-                <ee:transform doc:name="Transform Message" doc:id="40c751c2-0515-4ad9-8e3d-2ae287701d5a" >
-                    <ee:message >
-                        <ee:set-payload ><![CDATA[%dw 2.0
-output application/json
----
-{
-    "message": "Normal payload",
-    "size": vars.payloadSize,
-    "payload": payload
-}]]></ee:set-payload>
+
+            <otherwise>
+
+                <logger level="INFO" message='#[%dw 2.0
+                    output application/json
+                    ---
+                    {
+                        event: "NORMAL_PAYLOAD",
+                        sizeBytes: vars.payloadSize,
+                        correlationId: vars.correlationId
+                    }
+                ]'/>
+
+                <ee:transform doc:name="Normal Payload Response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[
+                        %dw 2.0
+                        output application/json
+                        ---
+                        {
+                            message: "Normal payload",
+                            sizeBytes: vars.payloadSize,
+                            payload: vars.originalPayload,
+                            correlationId: vars.correlationId
+                        }
+                        ]]></ee:set-payload>
                     </ee:message>
                 </ee:transform>
-                <logger level="INFO" doc:name="Logger" doc:id="2a3a7f20-62c3-4f60-b85a-0e82db0719b4" message="#[payload]"/>
+
             </otherwise>
         </choice>
+
+        <!-- ============================= END LOG =========================== -->
+        <logger level="INFO" message='#[%dw 2.0
+            output application/json
+            ---
+            {
+                event: "END_FLOW",
+                correlationId: vars.correlationId,
+                finalPayload: payload,
+                timestamp: now()
+            }
+        ]'/>
+
     </flow>
+
 </mule>
